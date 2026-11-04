@@ -3,7 +3,7 @@
 # issues. Requires: gh authenticated with 'project' scope. Run from repo root.
 set -euo pipefail
 
-TITLE="Acme Clean House"
+TITLE="Acme Inc. - Core Platform"
 OWNER=$(gh api user --jq .login)
 
 echo "Creating project '$TITLE' for @$OWNER ..."
