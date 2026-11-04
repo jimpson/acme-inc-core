@@ -1,48 +1,69 @@
 # acme-inc-core
 
-A convention-heavy image-processing library built on top of
-[scikit-image](https://scikit-image.org/). It exists to demo **"clean house"**:
-paying down accumulated technical debt with an AI agent that stays inside a
-boundary and is provable in CI.
+Acme Inc.'s internal image-processing core. A convention-heavy Python library
+built on top of [scikit-image](https://scikit-image.org/) that provides a stable,
+reviewed surface for image operations used across Acme services and pipelines.
 
-## Layout
-
-| Path | Role |
-| --- | --- |
-| `core/` | Convention-heavy internal package. Carries **baselined** debt (`core/legacy.py`). The CI gate does **not** scan `core/`. |
-| `wrapper/` | The **only** tree an issue may change. Calls `core` through its public surface. |
-| `tests/` | pytest suite. Every changed `wrapper/<name>.py` needs `tests/test_<name>.py`. |
-| `.cursor/rules/` | Standing conventions (public scikit-image APIs only, tests required, import whitelist). |
-| `.cursor/skills/` | `clean-house`, `boundary-check`, `review-ready`. |
-| `tools/ci_gate.py` | Diff-aware convention gate used by CI. |
-| `.github/workflows/ci.yml` | Runs the gate on every push/PR. |
-
-## The guardrail
-
-`tools/ci_gate.py` compares the branch to `origin/main` and, for each changed
-`wrapper/*.py`, enforces three rules:
-
-1. **deprecated-api** - no deprecated scikit-image calls (e.g. `multichannel=`,
-   `rgb2grey`, `selem=`, `util.pad`).
-2. **boundary** - imports limited to a whitelist; no private `skimage._*`
-   modules, no un-approved third-party libraries.
-3. **weak-tests** - the matching `tests/test_<name>.py` must exist and assert.
-
-Then the full test suite must pass. Because the gate only looks at the **diff**
-under `wrapper/`, the debt baselined in `core/` keeps `main` green while new work
-is held to the conventions.
-
-## Branches (demo)
-
-- `main` - runnable, debt baselined, green.
-- `bug/deprecated-call` - wrapper feature using a deprecated API -> fails gate.
-- `bug/weak-test` - wrapper feature whose test has no assertion -> fails gate.
-- `bug/bad-import` - wrapper feature importing a private module -> fails gate.
-- `fix/deprecated-api-demo` - a compliant wrapper feature with a real test -> green.
-
-## Run locally
+## Installation
 
 ```sh
 pip install -e ".[dev]"
+```
+
+Requires Python 3.11+.
+
+## Usage
+
+```python
+import numpy as np
+from core import ensure_gray, normalize
+from wrapper import equalize
+
+img = np.random.rand(128, 128, 3)
+
+gray = ensure_gray(img)        # RGB/RGBA -> float grayscale
+norm = normalize(gray)         # scale to [0, 1]
+eq   = equalize(img)           # histogram-equalized output
+```
+
+- `core` is the reviewed, stable foundation. Treat it as the public API.
+- `wrapper` holds higher-level operations composed from `core` and scikit-image.
+
+## Repository layout
+
+| Path | Role |
+| --- | --- |
+| `core/` | Stable internal package and public surface (`core/public.py`). Changes here require platform-team review. |
+| `wrapper/` | Higher-level image operations. Most feature work lands here. |
+| `tests/` | pytest suite. Every `wrapper/<name>.py` ships with `tests/test_<name>.py`. |
+| `tools/ci_gate.py` | Convention gate run in CI (see Contributing). |
+| `.github/workflows/ci.yml` | CI pipeline. |
+| `.cursor/` | Repo conventions and skills for assisted development. |
+
+## Contributing
+
+All changes land through a pull request to `main` and must pass CI. The pipeline
+runs a convention gate (`tools/ci_gate.py`) over the diff, plus the full test
+suite. For any changed `wrapper/*.py`, the gate enforces three standards:
+
+1. **Supported APIs only** - no deprecated scikit-image calls (e.g.
+   `multichannel=`, `rgb2grey`, `selem=`, `util.pad`).
+2. **Import boundary** - imports stay within the approved whitelist; no private
+   `skimage._*` modules and no unvetted third-party dependencies.
+3. **Real tests** - a matching `tests/test_<name>.py` exists and makes
+   assertions.
+
+`main` is protected: PRs require review, a passing `convention-gate` check, and
+an up-to-date branch before merge.
+
+## Local development
+
+```sh
+pip install -e ".[dev]"
+pytest
 python tools/ci_gate.py --base origin/main
 ```
+
+## License
+
+Proprietary - (c) Acme Inc. Internal use only.
