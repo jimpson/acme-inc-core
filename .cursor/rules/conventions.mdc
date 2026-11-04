@@ -1,0 +1,29 @@
+---
+description: Standing conventions for acme-inc-core. Enforced by tools/ci_gate.py.
+alwaysApply: true
+---
+
+# acme-inc-core conventions
+
+Changes land in `wrapper/` only. `core/` is convention-heavy and carries
+baselined debt; never "fix" `core/` in a wrapper issue.
+
+## Rules the CI gate enforces (on the diff, wrapper/ only)
+
+1. **Public scikit-image APIs only.** No deprecated calls: `multichannel=` (use
+   `channel_axis=`), `rgb2grey` (use `rgb2gray`), `selem=` (use `footprint=`),
+   `skimage.util.pad` (use `numpy.pad`), `marching_cubes_lewiner`,
+   `compare_ssim`/`compare_psnr` (use `skimage.metrics`).
+2. **Import whitelist.** Only `core`, `wrapper`, `skimage` (public modules),
+   `numpy`, and the Python stdlib. No private `skimage._*`, no un-approved
+   third-party libraries.
+3. **Tests required.** Every `wrapper/<name>.py` has `tests/test_<name>.py` with
+   at least one real assertion. A test with no assertion is a weak test and fails.
+
+## Working a clean-house issue
+
+- Read the issue's category label (`deprecated-api`, `weak-tests`, `boundary`).
+- Make the smallest wrapper change that satisfies it; call `core` only through
+  `core.public`.
+- Add or strengthen `tests/test_<name>.py`.
+- Run `python tools/ci_gate.py --base origin/main` before opening the PR.

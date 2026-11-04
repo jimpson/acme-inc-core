@@ -1,0 +1,24 @@
+name: ci
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+jobs:
+  convention-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Fetch base
+        run: git fetch origin main --depth=50 || true
+      - name: Convention gate (diff vs main)
+        run: python tools/ci_gate.py --base origin/main
