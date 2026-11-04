@@ -1,29 +1,54 @@
 ---
-description: Standing conventions for acme-inc-core. Enforced by tools/ci_gate.py.
+description: Standing conventions for acme-inc-core. The machine-enforced subset is in tools/ci_gate.py; the rest is enforced in review.
 alwaysApply: true
 ---
 
 # acme-inc-core conventions
 
-Changes land in `wrapper/` only. `core/` is convention-heavy and carries
-baselined debt; never "fix" `core/` in a wrapper issue.
+Feature and fix work lands in `wrapper/` and `tests/` only. `core/` is the
+reviewed foundation and carries baselined debt; never edit `core/` to resolve a
+wrapper issue, and never "fix" `core/legacy.py`. Reach `core` only through
+`core.public`.
 
-## Rules the CI gate enforces (on the diff, wrapper/ only)
+## Machine-enforced (tools/ci_gate.py, on the diff vs origin/main)
 
-1. **Public scikit-image APIs only.** No deprecated calls: `multichannel=` (use
-   `channel_axis=`), `rgb2grey` (use `rgb2gray`), `selem=` (use `footprint=`),
-   `skimage.util.pad` (use `numpy.pad`), `marching_cubes_lewiner`,
-   `compare_ssim`/`compare_psnr` (use `skimage.metrics`).
-2. **Import whitelist.** Only `core`, `wrapper`, `skimage` (public modules),
-   `numpy`, and the Python stdlib. No private `skimage._*`, no un-approved
-   third-party libraries.
-3. **Tests required.** Every `wrapper/<name>.py` has `tests/test_<name>.py` with
-   at least one real assertion. A test with no assertion is a weak test and fails.
+The gate inspects every changed `wrapper/*.py` (ignoring `__init__.py`). It does
+**not** scan `core/`, and it compares the merge-base diff (`origin/main...HEAD`).
 
-## Working a clean-house issue
+1. **Supported scikit-image APIs only.** No deprecated tokens anywhere in the
+   file text (including comments/docstrings - the check is textual):
+   `multichannel=` (use `channel_axis=`), `rgb2grey` (use `rgb2gray`), `selem=`
+   (use `footprint=`), `util.pad` (use `numpy.pad`), `marching_cubes_lewiner`,
+   `compare_ssim`/`compare_psnr` (use `skimage.metrics`). All matches are
+   reported, not just the first.
+2. **Import boundary.** Every import *root* must be in the whitelist: `core`,
+   `wrapper`, `skimage`, `numpy`, and the listed stdlib modules. No private
+   skimage (`skimage._*` paths or importing an underscored name), no third-party
+   library outside the whitelist (`cv2`, `PIL`, `requests`, `scipy`, ...).
+   Relative imports within the package are allowed.
+3. **Real tests.** Each changed `wrapper/<name>.py` must have
+   `tests/test_<name>.py` that (a) references `<name>`, and (b) makes at least
+   one **non-trivial** assertion - one that inspects a produced value. Bare or
+   constant assertions (`assert True`, `assert 1 == 1`) are rejected as weak.
 
-- Read the issue's category label (`deprecated-api`, `weak-tests`, `boundary`).
-- Make the smallest wrapper change that satisfies it; call `core` only through
-  `core.public`.
-- Add or strengthen `tests/test_<name>.py`.
-- Run `python tools/ci_gate.py --base origin/main` before opening the PR.
+After every changed file passes, the full `pytest` suite must pass.
+
+## Reviewer-enforced (the gate cannot see these - uphold them anyway)
+
+- **Contract coverage.** A single non-trivial assertion clears the gate, but the
+  test must actually pin the functions contract: output shape, value range,
+  dtype, and at least one edge case (empty, single-pixel, already-gray, etc.).
+- **Minimal diff.** Change only what the issue requires. No drive-by reformatting
+  or unrelated refactors.
+- **Correct fix, not gate-dodging.** Resolve the real defect; do not rename a
+  symbol or move code solely to slip past a textual check.
+
+## Working an issue
+
+1. Read the issue and its category label (`deprecated-api`, `weak-tests`,
+   `boundary`). The target is always a `wrapper/<name>.py`.
+2. Make the smallest compliant change; compose behavior from `core.public` and
+   public scikit-image.
+3. Add or strengthen `tests/test_<name>.py` to the contract-coverage bar above.
+4. Run `python tools/ci_gate.py --base origin/main` locally; it must pass the
+   gate and pytest before you open the PR.

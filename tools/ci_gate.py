@@ -2,15 +2,23 @@
 """Diff-aware convention gate for acme-inc-core.
 
 Only changes under `wrapper/` are gated. For each changed `wrapper/*.py` file
-(compared to a base ref) three checks run:
+(compared to a base ref) three checks run against that files diff:
 
-  1. deprecated-api : no deprecated scikit-image calls
-  2. boundary       : imports limited to the whitelist (no private skimage, no
-                      third-party libraries outside the allowlist)
-  3. weak-tests     : each changed wrapper module has tests/test_<name>.py with
-                      at least one assertion
+  1. deprecated-api : no deprecated scikit-image calls (all matches reported)
+  2. boundary       : import roots limited to the whitelist; no private skimage
+                      (`skimage._*` or underscored imported names); no
+                      third-party libraries outside the allowlist
+  3. weak-tests     : tests/test_<name>.py exists, references the module under
+                      test, and makes at least one non-trivial assertion
+                      (a bare/constant assertion such as `assert True` does not
+                      count)
 
-If all changed files pass, the full test suite must pass too.
+If every changed file passes, the full pytest suite must pass too.
+
+Scope notes for authors:
+  * Checks run only on the *diff* under `wrapper/`. `core/` is never scanned.
+  * deprecated-api is a regex over raw source, so a match inside a comment or
+    docstring will still trip it; keep deprecated tokens out of prose too.
 """
 from __future__ import annotations
 
@@ -60,12 +68,15 @@ def changed_wrapper_files(base: str) -> list[pathlib.Path]:
 
 
 def check_deprecated(path, src, fails):
+    seen = set()
     for pat in DEPRECATED:
-        m = re.search(pat, src)
-        if m:
+        for m in re.finditer(pat, src):
+            token = m.group(0)
+            if token in seen:
+                continue
+            seen.add(token)
             fails.append(("deprecated-api", _rel(path),
-                          f"deprecated scikit-image usage: {m.group(0)!r}"))
-            return
+                          f"deprecated scikit-image usage: {token!r}"))
 
 
 def check_imports(path, tree, fails):
@@ -90,16 +101,41 @@ def check_imports(path, tree, fails):
                 fails.append(("boundary", _rel(path), f"private skimage import: {mod}"))
 
 
+def _is_nontrivial_assert(assert_node) -> bool:
+    # A meaningful assertion references a value: a call, attribute access,
+    # subscript, or name. `assert True`, `assert 1`, `assert 1 == 2` are all
+    # constant-only and do not count.
+    for n in ast.walk(assert_node.test):
+        if isinstance(n, (ast.Call, ast.Attribute, ast.Subscript, ast.Name)):
+            return True
+    return False
+
+
 def check_tests(path, fails):
     name = path.stem
     test = ROOT / "tests" / f"test_{name}.py"
     if not test.exists():
         fails.append(("weak-tests", _rel(path), f"missing tests/test_{name}.py"))
         return
-    ttree = ast.parse(test.read_text())
-    if not any(isinstance(n, ast.Assert) for n in ast.walk(ttree)):
+    test_src = test.read_text()
+    try:
+        ttree = ast.parse(test_src)
+    except SyntaxError as e:
+        fails.append(("weak-tests", _rel(path), f"test file does not parse: {e}"))
+        return
+
+    asserts = [n for n in ast.walk(ttree) if isinstance(n, ast.Assert)]
+    if not asserts:
         fails.append(("weak-tests", _rel(path),
                       f"tests/test_{name}.py has no assertions (weak test)"))
+        return
+    if not any(_is_nontrivial_assert(a) for a in asserts):
+        fails.append(("weak-tests", _rel(path),
+                      f"tests/test_{name}.py has only trivial/constant assertions (weak test)"))
+        return
+    if not re.search(rf"\b{re.escape(name)}\b", test_src):
+        fails.append(("weak-tests", _rel(path),
+                      f"tests/test_{name}.py does not exercise wrapper.{name}"))
 
 
 def _rel(path):
