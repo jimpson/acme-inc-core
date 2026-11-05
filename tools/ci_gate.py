@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Diff-aware convention gate for acme-inc-core.
 
-Only changes under `wrapper/` are gated. For each changed `wrapper/*.py` file
-(compared to a base ref) three checks run against that files diff:
+Gates changes under `wrapper/`. "Changed" means any wrapper/*.py that differs from
+the base ref OR is staged, unstaged, or untracked in the working tree - so a new
+file the agent just wrote is checked even before it is committed. For each such
+file three checks run:
 
   1. deprecated-api : no deprecated scikit-image calls (all matches reported)
   2. boundary       : import roots limited to the whitelist; no private skimage
@@ -10,15 +12,15 @@ Only changes under `wrapper/` are gated. For each changed `wrapper/*.py` file
                       third-party libraries outside the allowlist
   3. weak-tests     : tests/test_<name>.py exists, references the module under
                       test, and makes at least one non-trivial assertion
-                      (a bare/constant assertion such as `assert True` does not
-                      count)
+                      (`assert True` / constant assertions do not count)
 
-If every changed file passes, the full pytest suite must pass too.
+If every changed file passes, the full pytest suite must pass too, unless
+--no-tests is given (static checks only - used by the in-editor Cursor hook).
 
 Scope notes for authors:
-  * Checks run only on the *diff* under `wrapper/`. `core/` is never scanned.
+  * Only wrapper/ is scanned. core/ is never gated.
   * deprecated-api is a regex over raw source, so a match inside a comment or
-    docstring will still trip it; keep deprecated tokens out of prose too.
+    docstring still trips it; keep deprecated tokens out of prose too.
 """
 from __future__ import annotations
 
@@ -48,23 +50,39 @@ ALLOWED_ROOTS = {
 }
 
 
-def changed_wrapper_files(base: str) -> list[pathlib.Path]:
+def _git(args):
     try:
-        out = subprocess.check_output(
-            ["git", "diff", "--name-only", f"{base}...HEAD"], cwd=ROOT, text=True
-        )
+        return subprocess.check_output(["git", *args], cwd=ROOT, text=True).splitlines()
     except subprocess.CalledProcessError:
-        out = subprocess.check_output(
-            ["git", "diff", "--name-only", base], cwd=ROOT, text=True
-        )
-    files = []
-    for line in out.splitlines():
-        p = line.strip()
-        if p.startswith("wrapper/") and p.endswith(".py") and not p.endswith("__init__.py"):
-            fp = ROOT / p
+        return []
+
+
+def _keep(path_str):
+    p = path_str.strip()
+    return (
+        p.startswith("wrapper/")
+        and p.endswith(".py")
+        and not p.endswith("__init__.py")
+    )
+
+
+def changed_wrapper_files(base: str) -> list[pathlib.Path]:
+    names = set()
+    committed = _git(["diff", "--name-only", f"{base}...HEAD"]) or _git(
+        ["diff", "--name-only", base]
+    )
+    names.update(committed)
+    names.update(_git(["diff", "--name-only", "--cached"]))
+    names.update(_git(["diff", "--name-only"]))
+    names.update(_git(["ls-files", "--others", "--exclude-standard"]))
+
+    files = {}
+    for n in names:
+        if _keep(n):
+            fp = ROOT / n.strip()
             if fp.exists():
-                files.append(fp)
-    return files
+                files[str(fp)] = fp
+    return [files[k] for k in sorted(files)]
 
 
 def check_deprecated(path, src, fails):
@@ -102,9 +120,6 @@ def check_imports(path, tree, fails):
 
 
 def _is_nontrivial_assert(assert_node) -> bool:
-    # A meaningful assertion references a value: a call, attribute access,
-    # subscript, or name. `assert True`, `assert 1`, `assert 1 == 2` are all
-    # constant-only and do not count.
     for n in ast.walk(assert_node.test):
         if isinstance(n, (ast.Call, ast.Attribute, ast.Subscript, ast.Name)):
             return True
@@ -123,7 +138,6 @@ def check_tests(path, fails):
     except SyntaxError as e:
         fails.append(("weak-tests", _rel(path), f"test file does not parse: {e}"))
         return
-
     asserts = [n for n in ast.walk(ttree) if isinstance(n, ast.Assert)]
     if not asserts:
         fails.append(("weak-tests", _rel(path),
@@ -145,6 +159,8 @@ def _rel(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="origin/main")
+    ap.add_argument("--no-tests", action="store_true",
+                    help="static checks only; skip pytest (used by the in-editor hook)")
     args = ap.parse_args()
 
     files = changed_wrapper_files(args.base)
@@ -169,6 +185,10 @@ def main():
         for cat, where, msg in fails:
             print(f"  [{cat}] {where}: {msg}")
         sys.exit(1)
+
+    if args.no_tests:
+        print("\nconvention gate passed (static checks only).")
+        sys.exit(0)
 
     print("\nconvention gate passed; running tests...")
     sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-q"], cwd=ROOT))
